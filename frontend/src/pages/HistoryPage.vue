@@ -13,6 +13,7 @@ const records = ref([]);
 const sensors = ref([]);
 const alerts = ref([]);
 const recordMode = ref("latest");
+const aggregateBucket = ref("auto");
 const limit = ref(100);
 const selectedField = ref("");
 const historyTab = ref("summary");
@@ -195,8 +196,19 @@ const trendOverview = computed(() => {
   };
 });
 
+const aggregateBucketLabel = computed(() => {
+  const labels = {
+    auto: "自动粒度",
+    minute: "分钟聚合",
+    hour: "小时聚合"
+  };
+  return labels[aggregateBucket.value] || "自动粒度";
+});
+
 const recordScopeLabel = computed(() =>
-  recordMode.value === "all" ? `全量 ${records.value.length} 条` : `最新 ${limit.value} 条`
+  recordMode.value === "all"
+    ? `${aggregateBucketLabel.value} ${records.value.length} 桶`
+    : `最新 ${limit.value} 条`
 );
 
 const selectedFieldChart = computed(() =>
@@ -407,6 +419,16 @@ function formatTimeLabel(value) {
   return `${month}-${day} ${hour}:${minute}`;
 }
 
+function formatRecordSource(record) {
+  if (record.source === "minute") {
+    return "分钟聚合";
+  }
+  if (record.source === "hour") {
+    return "小时聚合";
+  }
+  return record.reported_at ? "设备上报时间" : "平台入库时间";
+}
+
 async function loadDevices() {
   devices.value = listItems(await apiFetch("/api/devices"));
   if (!selectedDeviceId.value && devices.value.length > 0) {
@@ -475,29 +497,32 @@ function buildHistoryQuery(limitValue, offsetValue = 0, includeTotal = true) {
   return query;
 }
 
+function buildAggregateQuery() {
+  const query = new URLSearchParams({
+    device_id: selectedDeviceId.value,
+    bucket: aggregateBucket.value,
+    limit: "2000",
+    include_total: "true"
+  });
+
+  if (filters.start) {
+    query.set("start_time", `${filters.start}:00`);
+  }
+  if (filters.end) {
+    query.set("end_time", `${filters.end}:00`);
+  }
+
+  return query;
+}
+
 async function fetchHistoricalRecords() {
   if (recordMode.value !== "all") {
     const response = await apiFetch(`/api/data/historical?${buildHistoryQuery(limit.value).toString()}`);
     return listItems(response);
   }
 
-  const batchSize = 1000;
-  let offset = 0;
-  const allRecords = [];
-  let total = null;
-
-  do {
-    const response = await apiFetch(`/api/data/historical?${buildHistoryQuery(batchSize, offset, offset === 0).toString()}`);
-    const items = listItems(response);
-    allRecords.push(...items);
-    total = response.total ?? allRecords.length;
-    offset += batchSize;
-    if (!items.length) {
-      break;
-    }
-  } while (allRecords.length < total);
-
-  return allRecords;
+  const aggregateResponse = await apiFetch(`/api/data/historical/aggregated?${buildAggregateQuery().toString()}`);
+  return listItems(aggregateResponse);
 }
 
 function normalizeLimit() {
@@ -607,8 +632,16 @@ onMounted(init);
         <label>
           <span>记录范围</span>
           <select v-model="recordMode" @change="updateRecordMode(recordMode)">
-            <option value="latest">最新记录</option>
-            <option value="all">全量记录</option>
+            <option value="latest">最新明细</option>
+            <option value="all">聚合趋势</option>
+          </select>
+        </label>
+        <label>
+          <span>数据粒度</span>
+          <select v-model="aggregateBucket" :disabled="recordMode !== 'all'" @change="loadHistory">
+            <option value="auto">自动选择</option>
+            <option value="minute">分钟聚合</option>
+            <option value="hour">小时聚合</option>
           </select>
         </label>
         <label>
@@ -957,7 +990,7 @@ onMounted(init);
                 <td>{{ formatDateTime(record.reported_at || record.created_at) }}</td>
                 <td>{{ selectedField }}</td>
                 <td>{{ record.value }}</td>
-                <td>{{ record.reported_at ? "设备上报时间" : "平台入库时间" }}</td>
+                <td>{{ formatRecordSource(record) }}</td>
               </tr>
               <tr v-if="!selectedFieldRecords.length">
                 <td colspan="4" class="empty-state">当前字段暂无记录。</td>

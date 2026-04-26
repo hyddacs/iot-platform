@@ -27,10 +27,6 @@ const routes = [
     meta: { requiresAuth: true, title: "设备管理" }
   },
   {
-    path: "/monitor",
-    redirect: "/dashboard"
-  },
-  {
     path: "/history",
     name: "历史数据",
     component: () => import("../pages/HistoryPage.vue"),

@@ -1,7 +1,7 @@
 """
 Pydantic数据模型 - 根据最新表结构调整
 """
-from pydantic import BaseModel, Field, validator, constr
+from pydantic import BaseModel, Field, validator, constr, model_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from typing import Literal
@@ -61,16 +61,16 @@ class DeviceCreate(DeviceBase):
     device_secret: Optional[str] = None
     gateway_ip: Optional[str] = None
     slave_id: Optional[int] = Field(None, ge=1, le=247)
-    
-    @validator('gateway_ip', 'slave_id', always=True)
-    def validate_modbus_fields(cls, v, values):
-        """验证Modbus必填字段"""
-        if values.get('protocol_type') == 'modbus_gateway':
-            if 'gateway_ip' in values and v is None:
-                raise ValueError('Modbus设备必须提供gateway_ip')
-            if 'slave_id' in values and v is None:
-                raise ValueError('Modbus设备必须提供slave_id')
-        return v
+
+    @model_validator(mode="after")
+    def validate_protocol_fields(self):
+        """验证协议专属字段，避免创建无法被轮询的 Modbus 设备。"""
+        if self.protocol_type == "modbus_gateway":
+            if not self.gateway_ip:
+                raise ValueError("Modbus设备必须提供gateway_ip")
+            if self.slave_id is None:
+                raise ValueError("Modbus设备必须提供slave_id")
+        return self
     
     @validator('device_secret')
     def validate_http_fields(cls, v, values):
@@ -234,6 +234,37 @@ class HistoricalDataResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class HistoricalAggregateQuery(BaseModel):
+    """历史聚合查询模型。"""
+    device_id: str
+    field_en: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    bucket: Literal["auto", "minute", "hour"] = "auto"
+    limit: int = Field(2000, ge=1, le=10000)
+    include_total: bool = True
+
+
+class HistoricalAggregateRecord(BaseModel):
+    id: str
+    device_id: str
+    bucket_time: datetime
+    data: Dict[str, float]
+    min_data: Dict[str, float]
+    max_data: Dict[str, float]
+    count_data: Dict[str, int]
+    reported_at: datetime
+    created_at: datetime
+    source: str
+
+
+class HistoricalAggregateResponse(BaseModel):
+    items: List[HistoricalAggregateRecord]
+    total: int
+    limit: int
+    bucket: str
 
 
 class StatsResponse(BaseModel):

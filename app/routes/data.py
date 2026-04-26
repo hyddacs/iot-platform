@@ -4,18 +4,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_, case, func
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 import logging
 
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Device, DeviceData, Alert, SensorDataPoint
+from app.models import User, Device, DeviceData, Alert, SensorDataAggHour, SensorDataAggMin, SensorDataPoint
 from app.schemas import (
     AlertResolveRequest,
     AlertListResponse,
     AlertResponse,
     AlertSummaryResponse,
+    HistoricalAggregateQuery,
+    HistoricalAggregateResponse,
     HistoricalDataResponse,
     HistoricalDataQuery,
     HttpDataReport,
@@ -205,6 +207,112 @@ async def report_http_device_data(
         "alert_count": len(result["alerts"]),
         "recovered_alert_count": len(result["recovered_alerts"]),
         "maintenance_mode": device.is_maintenance,
+    }
+
+
+def resolve_aggregate_model(query: HistoricalAggregateQuery):
+    if query.bucket == "minute":
+        return "minute", SensorDataAggMin
+    if query.bucket == "hour":
+        return "hour", SensorDataAggHour
+
+    if query.start_time and query.end_time:
+        span = query.end_time - query.start_time
+        if span >= timedelta(days=3):
+            return "hour", SensorDataAggHour
+
+    return "minute", SensorDataAggMin
+
+
+@router.get("/historical/aggregated", response_model=HistoricalAggregateResponse)
+async def get_historical_aggregated_data(
+    query: HistoricalAggregateQuery = Depends(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """读取分钟/小时聚合序列，供趋势图和大范围历史分析使用。"""
+    device = db.execute(
+        select(Device).where(Device.device_id == query.device_id, Device.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="设备不存在")
+
+    bucket_name, aggregate_model = resolve_aggregate_model(query)
+    conditions = [aggregate_model.device_id == query.device_id]
+    if query.field_en:
+        conditions.append(aggregate_model.field_en == query.field_en)
+    if query.start_time:
+        conditions.append(aggregate_model.bucket_time >= query.start_time)
+    if query.end_time:
+        conditions.append(aggregate_model.bucket_time <= query.end_time)
+
+    total = 0
+    if query.include_total:
+        total = db.execute(
+            select(func.count(func.distinct(aggregate_model.bucket_time)))
+            .where(and_(*conditions))
+        ).scalar() or 0
+
+    bucket_times = [
+        row.bucket_time for row in db.execute(
+            select(aggregate_model.bucket_time)
+            .where(and_(*conditions))
+            .group_by(aggregate_model.bucket_time)
+            .order_by(aggregate_model.bucket_time.desc())
+            .limit(query.limit)
+        ).all()
+    ]
+
+    if not bucket_times:
+        return {
+            "items": [],
+            "total": total,
+            "limit": query.limit,
+            "bucket": bucket_name,
+        }
+
+    rows = db.execute(
+        select(aggregate_model)
+        .where(
+            aggregate_model.device_id == query.device_id,
+            aggregate_model.bucket_time.in_(bucket_times),
+            *((aggregate_model.field_en == query.field_en,) if query.field_en else ()),
+        )
+        .order_by(aggregate_model.bucket_time.desc(), aggregate_model.field_en)
+    ).scalars().all()
+
+    buckets = {
+        bucket_time: {
+            "id": f"{bucket_name}-{bucket_time.isoformat()}",
+            "device_id": query.device_id,
+            "bucket_time": bucket_time,
+            "data": {},
+            "min_data": {},
+            "max_data": {},
+            "count_data": {},
+            "reported_at": bucket_time,
+            "created_at": bucket_time,
+            "source": bucket_name,
+        }
+        for bucket_time in bucket_times
+    }
+
+    for row in rows:
+        if row.avg_value is None:
+            continue
+        bucket = buckets[row.bucket_time]
+        bucket["data"][row.field_en] = float(row.avg_value)
+        if row.min_value is not None:
+            bucket["min_data"][row.field_en] = float(row.min_value)
+        if row.max_value is not None:
+            bucket["max_data"][row.field_en] = float(row.max_value)
+        bucket["count_data"][row.field_en] = int(row.count_value or 0)
+
+    return {
+        "items": [buckets[bucket_time] for bucket_time in bucket_times],
+        "total": total,
+        "limit": query.limit,
+        "bucket": bucket_name,
     }
 
 
