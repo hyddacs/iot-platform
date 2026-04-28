@@ -65,7 +65,7 @@ class DeviceCreate(DeviceBase):
     @model_validator(mode="after")
     def validate_protocol_fields(self):
         """验证协议专属字段，避免创建无法被轮询的 Modbus 设备。"""
-        if self.protocol_type == "modbus_gateway":
+        if self.protocol_type == "modbus_gateway" and not self.is_test_device:
             if not self.gateway_ip:
                 raise ValueError("Modbus设备必须提供gateway_ip")
             if self.slave_id is None:

@@ -461,6 +461,56 @@ function resetDraftSensors() {
   draftSensors.value = [createSensorDraft()];
 }
 
+function showWizardError(message) {
+  error.value = message;
+  showErrorDialog(message);
+}
+
+function validateCreateDeviceStep() {
+  if (!deviceForm.device_id.trim() || !deviceForm.device_name.trim()) {
+    throw new Error("请填写设备 ID 和设备名称");
+  }
+
+  if (deviceForm.protocol_type === "modbus_gateway" && !deviceForm.is_test_device) {
+    if (!deviceForm.gateway_ip.trim()) {
+      throw new Error("请填写 Modbus 网关 IP，或在协议步骤启用测试设备");
+    }
+    if (deviceForm.slave_id === "" || deviceForm.slave_id === null || Number.isNaN(Number(deviceForm.slave_id))) {
+      throw new Error("请填写 Modbus 从站 ID");
+    }
+  }
+}
+
+function goToCreateStep(nextStep) {
+  if (createStep.value === nextStep) {
+    return;
+  }
+
+  const order = ["protocol", "device", "sensors"];
+  const currentIndex = order.indexOf(createStep.value);
+  const nextIndex = order.indexOf(nextStep);
+
+  if (nextIndex > currentIndex && nextStep === "sensors") {
+    try {
+      validateCreateDeviceStep();
+    } catch (nextError) {
+      showWizardError(toMessage(nextError));
+      createStep.value = "device";
+      return;
+    }
+  }
+
+  createStep.value = nextStep;
+}
+
+function goToNextCreateStep() {
+  goToCreateStep(createStep.value === "protocol" ? "device" : "sensors");
+}
+
+function goToPreviousCreateStep() {
+  goToCreateStep(createStep.value === "sensors" ? "device" : "protocol");
+}
+
 function openCreatePanel() {
   panelMode.value = "create";
   panelOpen.value = true;
@@ -1363,9 +1413,9 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-if="panelMode === 'create'" class="wizard-steps">
-          <button class="device-tab" :class="{ active: createStep === 'protocol' }" type="button" @click="createStep = 'protocol'">协议</button>
-          <button class="device-tab" :class="{ active: createStep === 'device' }" type="button" @click="createStep = 'device'">设备</button>
-          <button class="device-tab" :class="{ active: createStep === 'sensors' }" type="button" @click="createStep = 'sensors'">传感器</button>
+          <button class="device-tab" :class="{ active: createStep === 'protocol' }" type="button" @click="goToCreateStep('protocol')">协议</button>
+          <button class="device-tab" :class="{ active: createStep === 'device' }" type="button" @click="goToCreateStep('device')">设备</button>
+          <button class="device-tab" :class="{ active: createStep === 'sensors' }" type="button" @click="goToCreateStep('sensors')">传感器</button>
         </div>
 
         <form class="form-grid" @submit.prevent="submitDeviceForm">
@@ -1497,10 +1547,10 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="panelMode === 'create'" class="wizard-actions full-span">
-            <button class="ghost-btn" type="button" @click="createStep = createStep === 'sensors' ? 'device' : 'protocol'" :disabled="createStep === 'protocol'">
+            <button class="ghost-btn" type="button" @click="goToPreviousCreateStep" :disabled="createStep === 'protocol'">
               上一步
             </button>
-            <button v-if="createStep !== 'sensors'" class="primary-btn" type="button" @click="createStep = createStep === 'protocol' ? 'device' : 'sensors'">
+            <button v-if="createStep !== 'sensors'" class="primary-btn" type="button" @click="goToNextCreateStep">
               下一步
             </button>
             <button v-else class="primary-btn" type="submit" :disabled="savingDevice">

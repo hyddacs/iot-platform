@@ -14,6 +14,7 @@ const sensors = ref([]);
 const alerts = ref([]);
 const recordMode = ref("latest");
 const aggregateBucket = ref("auto");
+const actualAggregateBucket = ref("");
 const limit = ref(100);
 const selectedField = ref("");
 const historyTab = ref("summary");
@@ -202,7 +203,7 @@ const aggregateBucketLabel = computed(() => {
     minute: "分钟聚合",
     hour: "小时聚合"
   };
-  return labels[aggregateBucket.value] || "自动粒度";
+  return labels[actualAggregateBucket.value || aggregateBucket.value] || "自动粒度";
 });
 
 const recordScopeLabel = computed(() =>
@@ -517,11 +518,13 @@ function buildAggregateQuery() {
 
 async function fetchHistoricalRecords() {
   if (recordMode.value !== "all") {
+    actualAggregateBucket.value = "";
     const response = await apiFetch(`/api/data/historical?${buildHistoryQuery(limit.value).toString()}`);
     return listItems(response);
   }
 
   const aggregateResponse = await apiFetch(`/api/data/historical/aggregated?${buildAggregateQuery().toString()}`);
+  actualAggregateBucket.value = aggregateResponse.bucket || aggregateBucket.value;
   return listItems(aggregateResponse);
 }
 
